@@ -4,7 +4,8 @@
  */
 /** @typedef {{ cardId?: string; id?: string; idProduct?: number; productId?: number; [k: string]: unknown }} PriceRow */
 
-const STORAGE_KEY = "pokemon-tcg-portfolio-v1";
+const STORAGE_KEY = "pokemon-tcg-portfolio-v2";
+const LEGACY_STORAGE_KEY = "pokemon-tcg-portfolio-v1";
 
 /** Keys that are IDs or metadata, not price amounts, on price rows */
 const PRICE_ROW_NUMERIC_SKIP = new Set([
@@ -56,14 +57,69 @@ function normalizeCatalog(raw) {
   return [];
 }
 
+/**
+ * Stable key for matching purchase price on a line (2 decimal cents).
+ * @param {number | null | undefined} buyPrice
+ */
+function buyPriceKey(buyPrice) {
+  if (buyPrice == null || !Number.isFinite(buyPrice)) return "none";
+  return String(Math.round(buyPrice * 100));
+}
+
+/** @param {number | null | undefined} a @param {number | null | undefined} b */
+function buyPricesMatch(a, b) {
+  return buyPriceKey(a) === buyPriceKey(b);
+}
+
+/**
+ * Benchmark (avg7→trend) unit price from merged catalog row.
+ * @param {ReturnType<typeof mergedCard> | undefined} c
+ */
+function guideUnitPrice(c) {
+  if (!c || !c._defaultKey) return NaN;
+  const u = c._prices[c._defaultKey];
+  return typeof u === "number" && Number.isFinite(u) ? u : NaN;
+}
+
+/**
+ * @typedef {{ cardId: string; quantity: number; buyPrice: number | null }} PortfolioLine
+ */
+
+/** @returns {PortfolioLine[]} */
+function normalizePortfolioLines(rawLines) {
+  if (!Array.isArray(rawLines)) return [];
+  /** @type {PortfolioLine[]} */
+  const lines = [];
+  for (const row of rawLines) {
+    if (!row || typeof row !== "object" || typeof row.cardId !== "string") continue;
+    const qty = typeof row.quantity === "number" ? Math.max(1, Math.floor(row.quantity)) : 1;
+    if (typeof row.buyPrice === "number" && Number.isFinite(row.buyPrice) && row.buyPrice >= 0) {
+      lines.push({ cardId: row.cardId, quantity: qty, buyPrice: row.buyPrice });
+      continue;
+    }
+    lines.push({ cardId: row.cardId, quantity: qty, buyPrice: null });
+  }
+  return lines;
+}
+
 /** @returns {{ lines: PortfolioLine[] }} */
 function loadPortfolio() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    let fromLegacyKey = false;
+    if (!raw) {
+      raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+      fromLegacyKey = Boolean(raw);
+    }
     if (!raw) return { lines: [] };
     const data = JSON.parse(raw);
     if (!data || !Array.isArray(data.lines)) return { lines: [] };
-    return { lines: data.lines };
+    const lines = normalizePortfolioLines(data.lines);
+    if (fromLegacyKey) {
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, lines }));
+    }
+    return { lines };
   } catch {
     return { lines: [] };
   }
@@ -71,7 +127,7 @@ function loadPortfolio() {
 
 /** @param {{ lines: PortfolioLine[] }} p */
 function savePortfolio(p) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, lines: p.lines }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, lines: p.lines }));
 }
 
 /**
@@ -194,10 +250,6 @@ function pickDefaultPriceKey(pf) {
 }
 
 /**
- * @typedef {{ cardId: string; quantity: number; priceKey: string }} PortfolioLine
- */
-
-/**
  * Format EUR (guide prices are euro amounts).
  * @param {number} n
  */
@@ -209,8 +261,26 @@ function fmtEur(n) {
   }).format(n);
 }
 
+/**
+ * @param {number | null | undefined} n
+ * @returns {HTMLElement}
+ */
+function profitCellInner(n) {
+  const wrap = document.createElement("span");
+  if (!Number.isFinite(n)) {
+    wrap.textContent = "—";
+    wrap.className = "pl-muted";
+    return wrap;
+  }
+  wrap.textContent = fmtEur(n);
+  wrap.className = n >= 0 ? "pl-positive" : "pl-negative";
+  return wrap;
+}
+
 const els = {
   totalValue: /** @type {HTMLElement} */ (document.getElementById("total-value")),
+  totalPaid: /** @type {HTMLElement} */ (document.getElementById("total-paid")),
+  totalPl: /** @type {HTMLElement} */ (document.getElementById("total-pl")),
   distinctCount: /** @type {HTMLElement} */ (document.getElementById("distinct-count")),
   qtyCount: /** @type {HTMLElement} */ (document.getElementById("qty-count")),
   catalogGrid: /** @type {HTMLElement} */ (document.getElementById("catalog-grid")),
@@ -222,7 +292,7 @@ const els = {
   addDialog: /** @type {HTMLDialogElement} */ (document.getElementById("add-dialog")),
   addForm: /** @type {HTMLFormElement} */ (document.getElementById("add-form")),
   addQty: /** @type {HTMLInputElement} */ (document.getElementById("add-qty")),
-  addTier: /** @type {HTMLSelectElement} */ (document.getElementById("add-tier")),
+  addBuy: /** @type {HTMLInputElement} */ (document.getElementById("add-buy")),
   addDialogTitle: /** @type {HTMLElement} */ (document.getElementById("add-dialog-title")),
   addDialogMeta: /** @type {HTMLElement} */ (document.getElementById("add-dialog-meta")),
   addCancel: /** @type {HTMLButtonElement} */ (document.getElementById("add-cancel")),
@@ -376,22 +446,20 @@ function placeholdProduct(label) {
 
 /** @param {ReturnType<typeof mergedCard>} card */
 function openAddDialog(card) {
-  const keys = Object.keys(card._prices).sort();
   els.addDialogTitle.textContent = "Add to portfolio";
-  els.addDialogMeta.textContent = [card.name, `#${card.id}`, catalogMetaLine(card)].filter(Boolean).join(" · ");
-  els.addQty.value = "1";
+  const guideTxt =
+    card._defaultKey != null &&
+    typeof card._displayPrice === "number" &&
+    Number.isFinite(card._displayPrice)
+      ? `${fmtEur(card._displayPrice)} guide (${card._defaultKey})`
+      : "No benchmark price";
 
-  els.addTier.innerHTML = "";
-  for (const k of keys) {
-    const opt = document.createElement("option");
-    opt.value = k;
-    opt.textContent = `${k} (${fmtEur(card._prices[k])})`;
-    els.addTier.appendChild(opt);
-  }
+  els.addDialogMeta.textContent = [card.name, `#${card.id}`, catalogMetaLine(card), guideTxt].filter(Boolean).join(" · ");
+
+  els.addQty.value = "1";
+  els.addBuy.value = "";
 
   els.addDialog.dataset.cardId = card.id;
-
-  els.addTier.value = keys.includes(String(card._defaultKey)) ? String(card._defaultKey) : keys[0];
 
   if (typeof els.addDialog.showModal === "function") els.addDialog.showModal();
   else alert("Browser does not support dialogs; use Chrome, Edge, or Firefox.");
@@ -399,9 +467,16 @@ function openAddDialog(card) {
 
 /** @returns {PortfolioLine[]} */
 function getLinesSafe() {
-  return loadPortfolio().lines.filter(
-    (l) => l && typeof l.cardId === "string" && typeof l.quantity === "number" && typeof l.priceKey === "string"
-  );
+  return loadPortfolio().lines.filter((l) => l && typeof l.cardId === "string" && typeof l.quantity === "number");
+}
+
+/**
+ * @param {PortfolioLine[]} lines
+ * @param {string} cardId
+ * @param {number | null} buyPrice
+ */
+function findLineIndex(lines, cardId, buyPrice) {
+  return lines.findIndex((l) => l.cardId === cardId && buyPricesMatch(l.buyPrice, buyPrice));
 }
 
 function refreshHeader(lines) {
@@ -410,19 +485,53 @@ function refreshHeader(lines) {
   /** @type {Map<string, ReturnType<typeof mergedCard>>} */
   const byId = new Map(merged.map((c) => [c.id, c]));
 
-  let total = 0;
+  let marketTotal = 0;
+  let paidTotal = 0;
   let qty = 0;
+  let rowsWithPaid = 0;
+
   for (const line of lines) {
     const c = byId.get(line.cardId);
-    if (!c) continue;
-    const unit = c._prices[line.priceKey];
-    if (!Number.isFinite(unit)) continue;
-    const q = Math.max(0, Math.floor(line.quantity));
-    total += unit * q;
+    const unitGuide = guideUnitPrice(c);
+    const q = Math.max(1, Math.floor(line.quantity));
     qty += q;
+    if (Number.isFinite(unitGuide)) marketTotal += unitGuide * q;
+    if (line.buyPrice != null && Number.isFinite(line.buyPrice)) {
+      paidTotal += line.buyPrice * q;
+      rowsWithPaid++;
+    }
   }
 
-  els.totalValue.textContent = fmtEur(total);
+  els.totalValue.textContent = fmtEur(marketTotal);
+  els.totalPaid.textContent = rowsWithPaid > 0 ? fmtEur(paidTotal) : "—";
+
+  const allHavePaid = rowsWithPaid === lines.length && lines.length > 0;
+  if (lines.length === 0) {
+    els.totalPl.textContent = "—";
+    els.totalPl.className = "stat-value";
+    els.totalPl.title = "";
+    els.totalPaid.textContent = "—";
+    els.totalPaid.title = "";
+  } else if (allHavePaid) {
+    const pl = marketTotal - paidTotal;
+    els.totalPl.textContent = fmtEur(pl);
+    els.totalPl.className = `stat-value ${pl >= 0 ? "pl-positive" : "pl-negative"}`;
+  } else {
+    els.totalPl.textContent = "—";
+    els.totalPl.className = "stat-value pl-muted";
+    els.totalPl.title =
+      "P/L needs a purchase price on every line. Re-add migrated rows or remove old lines without cost.";
+    els.totalPaid.title =
+      rowsWithPaid > 0 && rowsWithPaid < lines.length
+        ? `${lines.length - rowsWithPaid} line(s) missing purchase price — total paid is partial.`
+        : "";
+  }
+
+  if (rowsWithPaid === lines.length && lines.length > 0) {
+    els.totalPaid.title = "";
+    els.totalPl.title = "";
+  }
+
   els.distinctCount.textContent = String(new Set(lines.map((l) => l.cardId)).size);
   els.qtyCount.textContent = String(qty);
 }
@@ -443,7 +552,8 @@ function renderPortfolio() {
 
   for (const line of lines) {
     const c = byId.get(line.cardId);
-    const unit = c?._prices[line.priceKey];
+    const unitGuide = guideUnitPrice(c);
+    const q = Math.max(1, Math.floor(line.quantity));
 
     const tr = document.createElement("tr");
 
@@ -474,27 +584,39 @@ function renderPortfolio() {
     inp.type = "number";
     inp.min = "1";
     inp.step = "1";
-    inp.valueAsNumber = Math.max(1, Math.floor(line.quantity));
+    inp.valueAsNumber = q;
     inp.addEventListener("change", () => {
       const next = Math.max(1, Math.floor(inp.valueAsNumber || 1));
       const p = loadPortfolio();
-      const i = p.lines.findIndex((l) => l.cardId === line.cardId && l.priceKey === line.priceKey);
+      const i = findLineIndex(p.lines, line.cardId, line.buyPrice);
       if (i >= 0) p.lines[i].quantity = next;
       savePortfolio(p);
       refreshHeader(getLinesSafe());
-      updateLineTotals(tr, line.cardId, line.priceKey, next);
+      updatePortfolioRowCells(tr, line.cardId, line.buyPrice, next);
     });
     wrap.appendChild(inp);
     tdQty.appendChild(wrap);
 
-    const tdUnit = document.createElement("td");
-    tdUnit.dataset.label = "Unit price";
-    tdUnit.textContent = Number.isFinite(unit) ? fmtEur(unit) : "—";
+    const tdGuide = document.createElement("td");
+    tdGuide.dataset.label = "Guide / unit";
+    tdGuide.textContent = Number.isFinite(unitGuide) ? fmtEur(unitGuide) : "—";
 
-    const tdLine = document.createElement("td");
-    tdLine.dataset.label = "Line total";
-    const q = Math.max(1, Math.floor(line.quantity));
-    tdLine.textContent = Number.isFinite(unit) ? fmtEur(unit * q) : "—";
+    const tdMarket = document.createElement("td");
+    tdMarket.dataset.label = "Market value";
+    tdMarket.textContent = Number.isFinite(unitGuide) ? fmtEur(unitGuide * q) : "—";
+
+    const tdPaid = document.createElement("td");
+    tdPaid.dataset.label = "Paid total";
+    if (line.buyPrice != null && Number.isFinite(line.buyPrice)) tdPaid.textContent = fmtEur(line.buyPrice * q);
+    else tdPaid.textContent = "—";
+
+    const tdPl = document.createElement("td");
+    tdPl.dataset.label = "P/L";
+    const marketLine = Number.isFinite(unitGuide) ? unitGuide * q : NaN;
+    const paidLine =
+      line.buyPrice != null && Number.isFinite(line.buyPrice) ? line.buyPrice * q : NaN;
+    const pl = Number.isFinite(marketLine) && Number.isFinite(paidLine) ? marketLine - paidLine : NaN;
+    tdPl.appendChild(profitCellInner(pl));
 
     const tdAct = document.createElement("td");
     tdAct.dataset.label = "";
@@ -504,7 +626,7 @@ function renderPortfolio() {
     remove.textContent = "Remove";
     remove.addEventListener("click", () => {
       const p = loadPortfolio();
-      p.lines = p.lines.filter((l) => !(l.cardId === line.cardId && l.priceKey === line.priceKey));
+      p.lines = p.lines.filter((l) => !(l.cardId === line.cardId && buyPricesMatch(l.buyPrice, line.buyPrice)));
       savePortfolio(p);
       renderPortfolio();
       renderCatalog(els.catalogSearch.value);
@@ -512,13 +634,15 @@ function renderPortfolio() {
     tdAct.appendChild(remove);
 
     tr.dataset.cardId = line.cardId;
-    tr.dataset.priceKey = line.priceKey;
+    tr.dataset.buyKey = buyPriceKey(line.buyPrice);
 
     tr.appendChild(tdCard);
     tr.appendChild(tdSet);
     tr.appendChild(tdQty);
-    tr.appendChild(tdUnit);
-    tr.appendChild(tdLine);
+    tr.appendChild(tdGuide);
+    tr.appendChild(tdMarket);
+    tr.appendChild(tdPaid);
+    tr.appendChild(tdPl);
     tr.appendChild(tdAct);
 
     els.holdingsBody.appendChild(tr);
@@ -528,16 +652,28 @@ function renderPortfolio() {
 /**
  * @param {HTMLTableRowElement} tr
  * @param {string} cardId
- * @param {string} priceKey
+ * @param {number | null} buyPrice
  * @param {number} qty
  */
-function updateLineTotals(tr, cardId, priceKey, qty) {
+function updatePortfolioRowCells(tr, cardId, buyPrice, qty) {
   if (!merged) return;
   const c = merged.find((x) => x.id === cardId);
-  const unit = c?._prices[priceKey];
+  const unitGuide = guideUnitPrice(c);
   const cells = tr.querySelectorAll("td");
-  const lineCell = cells[4];
-  if (lineCell && Number.isFinite(unit)) lineCell.textContent = fmtEur(unit * qty);
+  const tdMarket = cells[4];
+  const tdPaid = cells[5];
+  const tdPl = cells[6];
+  if (tdMarket && Number.isFinite(unitGuide)) tdMarket.textContent = fmtEur(unitGuide * qty);
+  if (tdPaid) {
+    if (buyPrice != null && Number.isFinite(buyPrice)) tdPaid.textContent = fmtEur(buyPrice * qty);
+    else tdPaid.textContent = "—";
+  }
+  if (tdPl) {
+    const marketLine = Number.isFinite(unitGuide) ? unitGuide * qty : NaN;
+    const paidLine = buyPrice != null && Number.isFinite(buyPrice) ? buyPrice * qty : NaN;
+    const pl = Number.isFinite(marketLine) && Number.isFinite(paidLine) ? marketLine - paidLine : NaN;
+    tdPl.replaceChildren(profitCellInner(pl));
+  }
 }
 
 /** @param {string} query */
@@ -562,11 +698,14 @@ async function bootstrap() {
     const id = els.addDialog.dataset.cardId;
     if (!id || !merged) return;
     const qty = Math.max(1, Math.floor(els.addQty.valueAsNumber || 1));
-    const priceKey = els.addTier.value;
+    const buyRaw = els.addBuy.valueAsNumber;
+    if (!Number.isFinite(buyRaw) || buyRaw < 0) return;
+    const buyRounded = Math.round(buyRaw * 100) / 100;
+
     const p = loadPortfolio();
-    const dup = p.lines.find((l) => l.cardId === id && l.priceKey === priceKey);
-    if (dup) dup.quantity += qty;
-    else p.lines.push({ cardId: id, quantity: qty, priceKey });
+    const dupIdx = findLineIndex(p.lines, id, buyRounded);
+    if (dupIdx >= 0) p.lines[dupIdx].quantity += qty;
+    else p.lines.push({ cardId: id, quantity: qty, buyPrice: buyRounded });
     savePortfolio(p);
     els.addDialog.close();
     renderPortfolio();

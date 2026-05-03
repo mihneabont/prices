@@ -17,8 +17,16 @@
       </div>
       <div class="header-stats">
         <div class="stat">
-          <span class="stat-label">Portfolio value</span>
+          <span class="stat-label">Market value</span>
           <span class="stat-value" id="total-value">€0.00</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">You paid</span>
+          <span class="stat-value" id="total-paid">€0.00</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Unrealised P/L</span>
+          <span class="stat-value" id="total-pl">—</span>
         </div>
         <div class="stat">
           <span class="stat-label">SKU types</span>
@@ -58,8 +66,10 @@
               <th>Product</th>
               <th>Type / expansion</th>
               <th>Qty</th>
-              <th>Unit price</th>
-              <th>Line total</th>
+              <th>Guide / unit</th>
+              <th>Market value</th>
+              <th>Paid total</th>
+              <th>P/L</th>
               <th></th>
             </tr>
           </thead>
@@ -81,10 +91,10 @@
           <input type="number" id="add-qty" min="1" step="1" value="1" required />
         </label>
         <label>
-          Price tier
-          <select id="add-tier" aria-describedby="tier-help"></select>
+          Your purchase price (per unit, €)
+          <input type="number" id="add-buy" min="0" step="0.01" value="" required placeholder="What you paid" />
         </label>
-        <p id="tier-help" class="hint">Numeric fields from <code>prices.json</code> for this product id (<code>idProduct</code> / <code>cardId</code>).</p>
+        <p id="tier-help" class="hint">Guide value tracks the benchmark (avg7 → trend …) automatically. P/L = market vs what you entered here.</p>
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="add-cancel">Cancel</button>
           <button type="submit" class="btn primary">Add</button>

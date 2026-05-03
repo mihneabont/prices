@@ -111,6 +111,30 @@ code {
   color: var(--accent);
 }
 
+.stat-value.pl-positive {
+  color: var(--accent);
+}
+
+.stat-value.pl-negative {
+  color: var(--danger);
+}
+
+.stat-value.pl-muted,
+.pl-muted {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.pl-positive {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.pl-negative {
+  color: var(--danger);
+  font-weight: 600;
+}
+
 .tabs {
   display: flex;
   gap: 0.5rem;
