@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pokémon TCG Sealed Portfolio</title>
+    <link rel="stylesheet" href="./styles/main.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Pokémon TCG — Sealed portfolio</h1>
+          <p class="subtitle">Boosters, boxes, bundles, etc. · data from JSON · holdings in this browser</p>
+        </div>
+      </div>
+      <div class="header-stats">
+        <div class="stat">
+          <span class="stat-label">Portfolio value</span>
+          <span class="stat-value" id="total-value">€0.00</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">SKU types</span>
+          <span class="stat-value" id="distinct-count">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Total quantity</span>
+          <span class="stat-value" id="qty-count">0</span>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist" aria-label="Main">
+      <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="catalog">Products</button>
+      <button type="button" class="tab" role="tab" aria-selected="false" data-tab="portfolio">My portfolio</button>
+    </nav>
+
+    <main>
+      <section id="panel-catalog" class="panel active" role="tabpanel">
+        <div class="toolbar">
+          <label class="search-wrap">
+            <span class="visually-hidden">Search sealed products</span>
+            <input type="search" id="catalog-search" placeholder="Search name, category, expansion id…" autocomplete="off" />
+          </label>
+          <p class="hint" id="catalog-status">Loading catalog…</p>
+        </div>
+        <ul class="card-grid" id="catalog-grid"></ul>
+      </section>
+
+      <section id="panel-portfolio" class="panel" role="tabpanel" hidden>
+        <div class="toolbar">
+          <p class="hint" id="portfolio-empty" hidden>No holdings yet. Add from the Products tab.</p>
+        </div>
+        <table class="holdings-table" id="holdings-table">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Type / expansion</th>
+              <th>Qty</th>
+              <th>Unit price</th>
+              <th>Line total</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <p>Daily workflow: replace <code>data/cards.json</code> and <code>data/prices.json</code>, then refresh.</p>
+    </footer>
+
+    <dialog id="add-dialog" class="modal">
+      <form method="dialog" id="add-form">
+        <h2 id="add-dialog-title">Add to portfolio</h2>
+        <p class="modal-meta" id="add-dialog-meta"></p>
+        <label>
+          Quantity
+          <input type="number" id="add-qty" min="1" step="1" value="1" required />
+        </label>
+        <label>
+          Price tier
+          <select id="add-tier" aria-describedby="tier-help"></select>
+        </label>
+        <p id="tier-help" class="hint">Numeric fields from <code>prices.json</code> for this product id (<code>idProduct</code> / <code>cardId</code>).</p>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="add-cancel">Cancel</button>
+          <button type="submit" class="btn primary">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>
